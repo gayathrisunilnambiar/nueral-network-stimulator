@@ -1,0 +1,160 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Neural Network Design System - All colors, gradients, fonts, etc defined here. 
+All colors MUST be HSL.
+*/
+
+@layer base {
+  :root {
+    --background: 220 25% 6%;
+    --foreground: 210 40% 98%;
+
+    --card: 220 25% 8%;
+    --card-foreground: 210 40% 98%;
+
+    --popover: 220 25% 8%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 263 70% 50%;
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 220 25% 12%;
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 220 25% 12%;
+    --muted-foreground: 215 20% 65%;
+
+    --accent: 263 70% 50%;
+    --accent-foreground: 210 40% 98%;
+
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 220 25% 15%;
+    --input: 220 25% 15%;
+    --ring: 263 70% 50%;
+
+    /* Neural Network specific colors */
+    --neural-blue: 220 100% 60%;
+    --neural-purple: 263 70% 50%;
+    --neural-cyan: 185 100% 65%;
+    --neural-gradient: linear-gradient(135deg, hsl(220 100% 60%), hsl(263 70% 50%));
+    --neural-gradient-subtle: linear-gradient(135deg, hsl(220 100% 60% / 0.1), hsl(263 70% 50% / 0.1));
+    --neuron-active: 120 100% 60%;
+    --neuron-inactive: 220 25% 25%;
+    --connection-active: 263 70% 50%;
+    --connection-inactive: 220 25% 20%;
+
+    /* Animations */
+    --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    --transition-bounce: all 0.5s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+
+    --radius: 0.5rem;
+
+    --sidebar-background: 0 0% 98%;
+
+    --sidebar-foreground: 240 5.3% 26.1%;
+
+    --sidebar-primary: 240 5.9% 10%;
+
+    --sidebar-primary-foreground: 0 0% 98%;
+
+    --sidebar-accent: 240 4.8% 95.9%;
+
+    --sidebar-accent-foreground: 240 5.9% 10%;
+
+    --sidebar-border: 220 13% 91%;
+
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+
+  .light {
+    --background: 0 0% 100%;
+    --foreground: 220 25% 6%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 220 25% 6%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 25% 6%;
+
+    --primary: 263 70% 50%;
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 220 25% 96%;
+    --secondary-foreground: 220 25% 6%;
+
+    --muted: 220 25% 96%;
+    --muted-foreground: 215 20% 35%;
+
+    --accent: 263 70% 50%;
+    --accent-foreground: 210 40% 98%;
+
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 220 25% 85%;
+    --input: 220 25% 85%;
+    --ring: 263 70% 50%;
+
+    /* Neural Network specific colors for light mode */
+    --neural-blue: 220 100% 50%;
+    --neural-purple: 263 70% 45%;
+    --neural-cyan: 185 100% 55%;
+    --neuron-active: 120 100% 50%;
+    --neuron-inactive: 220 25% 75%;
+    --connection-active: 263 70% 45%;
+    --connection-inactive: 220 25% 80%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-bold;
+  }
+}
+
+/* Neural Network specific animations */
+@keyframes pulse-neuron {
+  0%, 100% { 
+    transform: scale(1);
+    opacity: 0.8;
+  }
+  50% { 
+    transform: scale(1.1);
+    opacity: 1;
+  }
+}
+
+@keyframes flow-data {
+  0% { 
+    stroke-dashoffset: 20;
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% { 
+    stroke-dashoffset: 0;
+    opacity: 0.3;
+  }
+}
+
+.neuron-active {
+  animation: pulse-neuron 1.5s ease-in-out infinite;
+}
+
+.connection-flow {
+  stroke-dasharray: 5 5;
+  animation: flow-data 2s linear infinite;
+}
