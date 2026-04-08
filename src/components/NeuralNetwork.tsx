@@ -1,303 +1,231 @@
-import React, { useCallback, useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   ReactFlow,
   Background,
   Controls,
-  useNodesState,
-  useEdgesState,
   Node,
   Edge,
+  Position,
+  useNodesState,
+  useEdgesState
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
+import { NeuralNetwork as NetEngine } from '../lib/neural-net';
+import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
+import { Slider } from './ui/slider';
+import { Badge } from './ui/badge';
 
-// Define node types
-const NeuronNode = ({ data }: { data: { label: string; active: boolean; layerType: string } }) => {
-  const getNodeStyle = () => {
-    const baseClasses = `
-      w-12 h-12 rounded-full border-2 flex items-center justify-center text-2xl
-      transition-all duration-300
-    `;
-    
-    if (data.active) {
-      switch (data.layerType) {
-        case 'input':
-          return `${baseClasses} bg-neural-blue border-neural-blue text-background animate-pulse-neuron`;
-        case 'hidden':
-          return `${baseClasses} bg-neural-purple border-neural-purple text-background animate-pulse-neuron`;
-        case 'output':
-          return `${baseClasses} bg-neural-cyan border-neural-cyan text-background animate-pulse-neuron`;
-        default:
-          return `${baseClasses} bg-neuron-active border-neuron-active text-background animate-pulse-neuron`;
-      }
-    }
-    
-    return `${baseClasses} bg-neuron-inactive border-neuron-inactive text-muted-foreground`;
-  };
+// Color interpolator for weights (-1 to 1) -> (red to blue)
+const getWeightColor = (w: number) => {
+  if (w < 0) {
+    const intensity = Math.min(1, Math.abs(w));
+    return `rgba(239, 68, 68, ${0.3 + intensity * 0.7})`; // Red
+  } else {
+    const intensity = Math.min(1, Math.abs(w));
+    return `rgba(59, 130, 246, ${0.3 + intensity * 0.7})`; // Blue
+  }
+};
+
+const getWeightStrokeWidth = (w: number) => {
+  return 1 + Math.min(4, Math.abs(w) * 2);
+};
+
+// Node component
+const NeuronNode = ({ data }: { data: any }) => {
+  const val = data.outputValue || 0; 
+  const opacity = Math.min(1, Math.abs(val));
+  const isPositive = val > 0;
+  const color = isPositive ? `rgba(59, 130, 246, ${opacity})` : `rgba(239, 68, 68, ${opacity})`;
 
   return (
-    <div className={getNodeStyle()}>
-      🧍
-    </div>
+    <Popover>
+      <PopoverTrigger asChild>
+        <div className="w-10 h-10 rounded-full border border-slate-300 shadow-sm flex items-center justify-center cursor-pointer overflow-hidden relative transition-transform hover:scale-110 bg-white">
+          <div className="absolute inset-0 transition-colors duration-100" style={{ backgroundColor: color }}></div>
+          {/* subtle inner shadow/ring to make it look like a technical indicator */}
+          <div className="absolute inset-1 rounded-full border border-white/20"></div>
+        </div>
+      </PopoverTrigger>
+      <PopoverContent className="w-48 text-sm" side="top">
+        <div className="space-y-2">
+          <h4 className="font-semibold text-xs text-muted-foreground uppercase">{data.layerType} Neuron</h4>
+          <div className="flex justify-between">
+            <span>Activation:</span>
+            <span className="font-mono">{val?.toFixed(3)}</span>
+          </div>
+          {data.layerType !== 'input' && (
+            <div className="flex justify-between">
+              <span>Bias:</span>
+              <span className="font-mono">{data.bias?.toFixed(3)}</span>
+            </div>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 };
 
-const nodeTypes = {
-  neuron: NeuronNode,
-};
+const nodeTypes = { neuron: NeuronNode };
 
 interface NeuralNetworkProps {
-  hiddenLayerCount: number;
-  isTraining: boolean;
+  networkEngine: NetEngine | null;
+  architecture: number[];
   currentEpoch: number;
-  onTrainingStep: (loss: number) => void;
+  onWeightChange: (layerIdx: number, fromNeuron: number, toNeuron: number, newWeight: number) => void;
 }
 
-export default function NeuralNetwork({ 
-  hiddenLayerCount, 
-  isTraining, 
-  currentEpoch,
-  onTrainingStep 
-}: NeuralNetworkProps) {
-  const [nodes, setNodes, onNodesChange] = useNodesState([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
-  const [currentStep, setCurrentStep] = useState(0);
+export default function NeuralNetworkVis({ networkEngine, architecture, currentEpoch, onWeightChange }: NeuralNetworkProps) {
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+  
+  const [selectedEdge, setSelectedEdge] = useState<{ id: string, w: number, layerIdx: number, from: number, to: number } | null>(null);
 
-  // Generate network structure based on hidden layer count
-  const networkStructure = useMemo(() => {
-    const inputCount = 3;
-    const hiddenNeuronCount = 4;
-    const outputCount = 2;
+  useEffect(() => {
+    if (!networkEngine) return;
+    
+    const engineWeights = networkEngine.getWeights();
+    
     const layerSpacing = 200;
-    const neuronSpacing = 80;
-
-    // Calculate total width for centering
-    const totalLayers = hiddenLayerCount + 2; // input + hidden + output
-    const totalWidth = totalLayers * layerSpacing;
-
+    const neuronSpacing = 70;
+    
     const newNodes: Node[] = [];
     const newEdges: Edge[] = [];
+    
+    const maxNeurons = Math.max(...architecture);
+    
+    // Create Nodes
+    for (let layerIdx = 0; layerIdx < architecture.length; layerIdx++) {
+      const numNeurons = architecture[layerIdx];
+      const yOffset = (maxNeurons - numNeurons) * neuronSpacing / 2;
+      
+      let layerType = 'hidden';
+      if (layerIdx === 0) layerType = 'input';
+      if (layerIdx === architecture.length - 1) layerType = 'output';
 
-    // Input layer
-    for (let i = 0; i < inputCount; i++) {
-      newNodes.push({
-        id: `i${i}`,
-        type: 'neuron',
-        position: { 
-          x: 0, 
-          y: i * neuronSpacing + (hiddenNeuronCount - inputCount) * neuronSpacing / 2 
-        },
-        data: { label: '', active: false, layerType: 'input' }
-      });
-    }
-
-    // Hidden layers
-    for (let layer = 0; layer < hiddenLayerCount; layer++) {
-      for (let i = 0; i < hiddenNeuronCount; i++) {
+      let outputs: number[] = new Array(numNeurons).fill(0);
+      let biases: number[] = new Array(numNeurons).fill(0);
+      if (layerIdx > 0 && engineWeights[layerIdx - 1]) {
+        outputs = engineWeights[layerIdx - 1].outputs || new Array(numNeurons).fill(0);
+        biases = engineWeights[layerIdx - 1].biases || new Array(numNeurons).fill(0);
+      }
+      
+      for (let i = 0; i < numNeurons; i++) {
         newNodes.push({
-          id: `h${layer}-${i}`,
+          id: `L${layerIdx}-N${i}`,
           type: 'neuron',
-          position: { 
-            x: (layer + 1) * layerSpacing, 
-            y: i * neuronSpacing 
+          position: { x: layerIdx * layerSpacing, y: i * neuronSpacing + yOffset },
+          data: { 
+            layerType, 
+            outputValue: outputs[i],
+            bias: layerIdx > 0 ? biases[i] : 0,
+            nId: i,
+            lId: layerIdx
           },
-          data: { label: '', active: false, layerType: 'hidden' }
+          targetPosition: Position.Left,
+          sourcePosition: Position.Right,
         });
       }
     }
+    
+    // Create Edges
+    for (let layerIdx = 0; layerIdx < engineWeights.length; layerIdx++) {
+      const wMatrix = engineWeights[layerIdx].weights; 
+      const numFrom = architecture[layerIdx];
+      const numTo = architecture[layerIdx + 1];
+      
+      for (let toN = 0; toN < numTo; toN++) {
+        for (let fromN = 0; fromN < numFrom; fromN++) {
+          const w = wMatrix[toN][fromN];
+          const edgeId = `e-L${layerIdx}-N${fromN}-L${layerIdx+1}-N${toN}`;
+          const isSelected = selectedEdge?.id === edgeId;
 
-    // Output layer
-    for (let i = 0; i < outputCount; i++) {
-      newNodes.push({
-        id: `o${i}`,
-        type: 'neuron',
-        position: { 
-          x: (hiddenLayerCount + 1) * layerSpacing, 
-          y: i * neuronSpacing + (hiddenNeuronCount - outputCount) * neuronSpacing / 2 
-        },
-        data: { label: '', active: false, layerType: 'output' }
-      });
-    }
-
-    // Create connections
-    // Input to first hidden layer
-    for (let i = 0; i < inputCount; i++) {
-      for (let j = 0; j < hiddenNeuronCount; j++) {
-        newEdges.push({
-          id: `i${i}-h0-${j}`,
-          source: `i${i}`,
-          target: `h0-${j}`,
-          style: { stroke: 'hsl(var(--connection-inactive))', strokeWidth: 1 }
-        });
-      }
-    }
-
-    // Hidden layer to hidden layer connections
-    for (let layer = 0; layer < hiddenLayerCount - 1; layer++) {
-      for (let i = 0; i < hiddenNeuronCount; i++) {
-        for (let j = 0; j < hiddenNeuronCount; j++) {
           newEdges.push({
-            id: `h${layer}-${i}-h${layer + 1}-${j}`,
-            source: `h${layer}-${i}`,
-            target: `h${layer + 1}-${j}`,
-            style: { stroke: 'hsl(var(--connection-inactive))', strokeWidth: 1 }
+            id: edgeId,
+            source: `L${layerIdx}-N${fromN}`,
+            target: `L${layerIdx+1}-N${toN}`,
+            style: { 
+              stroke: isSelected ? '#10b981' : getWeightColor(w), 
+              strokeWidth: isSelected ? 4 : getWeightStrokeWidth(w),
+              transition: 'stroke 0.1s ease, stroke-width 0.1s ease',
+              zIndex: isSelected ? 10 : 0
+            },
+            animated: Math.abs(w) > 1.5,
+            data: { w, layerIdx, fromN, toN }
           });
         }
       }
     }
 
-    // Last hidden layer to output
-    for (let i = 0; i < hiddenNeuronCount; i++) {
-      for (let j = 0; j < outputCount; j++) {
-        newEdges.push({
-          id: `h${hiddenLayerCount - 1}-${i}-o${j}`,
-          source: `h${hiddenLayerCount - 1}-${i}`,
-          target: `o${j}`,
-          style: { stroke: 'hsl(var(--connection-inactive))', strokeWidth: 1 }
-        });
+    setNodes(newNodes);
+    setEdges(newEdges);
+    
+    if (selectedEdge) {
+      const ew = engineWeights[selectedEdge.layerIdx].weights[selectedEdge.to][selectedEdge.from];
+      if (ew !== selectedEdge.w) {
+         setSelectedEdge(prev => prev ? { ...prev, w: ew } : prev);
       }
     }
-
-    return { nodes: newNodes, edges: newEdges };
-  }, [hiddenLayerCount]);
-
-  // Reset network when structure changes
-  useEffect(() => {
-    setNodes(networkStructure.nodes);
-    setEdges(networkStructure.edges);
-    setCurrentStep(0);
-  }, [networkStructure, setNodes, setEdges]);
-
-  // Simulate forward pass with loss calculation
-  const simulateTrainingStep = useCallback(() => {
-    const steps = [
-      // Step 1: Activate input layer
-      () => {
-        setNodes(nodes => nodes.map(node => ({
-          ...node,
-          data: { ...node.data, active: node.id.startsWith('i') }
-        })));
-        setEdges(edges => edges.map(edge => ({
-          ...edge,
-          style: { stroke: 'hsl(var(--connection-inactive))', strokeWidth: 1 }
-        })));
-      },
-      // Step 2-n: Activate each hidden layer progressively
-      ...Array.from({ length: hiddenLayerCount }, (_, layerIndex) => () => {
-        // Activate connections to this layer
-        setEdges(edges => edges.map(edge => {
-          const isConnectionToCurrentLayer = edge.target.startsWith(`h${layerIndex}-`);
-          return {
-            ...edge,
-            style: { 
-              stroke: isConnectionToCurrentLayer 
-                ? 'hsl(var(--connection-active))' 
-                : edge.style?.stroke || 'hsl(var(--connection-inactive))',
-              strokeWidth: isConnectionToCurrentLayer ? 2 : 1
-            }
-          };
-        }));
-
-        // Activate neurons in this layer
-        setNodes(nodes => nodes.map(node => {
-          const shouldActivate = node.id.startsWith('i') || 
-                                node.id.startsWith(`h${layerIndex}-`) ||
-                                (layerIndex > 0 && node.id.startsWith('h') && 
-                                 parseInt(node.id.split('-')[0].substring(1)) < layerIndex);
-          return {
-            ...node,
-            data: { ...node.data, active: shouldActivate }
-          };
-        }));
-      }),
-      // Final step: Activate output layer and calculate loss
-      () => {
-        setEdges(edges => edges.map(edge => {
-          const isOutputConnection = edge.target.startsWith('o');
-          return {
-            ...edge,
-            style: { 
-              stroke: isOutputConnection 
-                ? 'hsl(var(--connection-active))' 
-                : 'hsl(var(--connection-inactive))',
-              strokeWidth: isOutputConnection ? 2 : 1
-            }
-          };
-        }));
-
-        setNodes(nodes => nodes.map(node => ({
-          ...node,
-          data: { ...node.data, active: true }
-        })));
-
-        // Calculate loss (simulated - decreases with more layers and epochs)
-        const baseLoss = 1.0;
-        const layerReduction = Math.log(hiddenLayerCount + 1) * 0.1;
-        const epochReduction = currentEpoch * 0.02;
-        const randomNoise = (Math.random() - 0.5) * 0.1;
-        const loss = Math.max(0.001, baseLoss - layerReduction - epochReduction + randomNoise);
-        
-        onTrainingStep(loss);
-      }
-    ];
-
-    if (currentStep < steps.length) {
-      steps[currentStep]();
-      setCurrentStep(prev => prev + 1);
-    } else {
-      setCurrentStep(0);
-    }
-  }, [currentStep, hiddenLayerCount, currentEpoch, onTrainingStep, setNodes, setEdges]);
-
-  // Handle training animation
-  useEffect(() => {
-    let interval: NodeJS.Timeout;
-    if (isTraining) {
-      interval = setInterval(() => {
-        simulateTrainingStep();
-      }, 500);
-    }
-    return () => clearInterval(interval);
-  }, [isTraining, simulateTrainingStep]);
-
-  // Reset when not training
-  useEffect(() => {
-    if (!isTraining && currentStep === 0) {
-      setNodes(networkStructure.nodes);
-      setEdges(networkStructure.edges);
-    }
-  }, [isTraining, currentStep, networkStructure, setNodes, setEdges]);
+    
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [networkEngine, architecture, currentEpoch]);
 
   return (
     <div className="w-full h-[500px] relative bg-card rounded-lg border overflow-hidden">
-      <div className="absolute top-4 right-4 z-10 text-sm text-muted-foreground bg-card/90 px-3 py-2 rounded-md border">
-        {hiddenLayerCount} Hidden Layer{hiddenLayerCount !== 1 ? 's' : ''} • Epoch {currentEpoch}
-      </div>
-
       <ReactFlow
         nodes={nodes}
         edges={edges}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
         nodeTypes={nodeTypes}
         fitView
         attributionPosition="bottom-left"
         proOptions={{ hideAttribution: true }}
         nodesDraggable={false}
         nodesConnectable={false}
-        elementsSelectable={false}
+        elementsSelectable={true}
+        onEdgeClick={(e, edge) => {
+          setSelectedEdge({
+            id: edge.id,
+            w: edge.data.w,
+            layerIdx: edge.data.layerIdx,
+            from: edge.data.fromN,
+            to: edge.data.toN
+          });
+        }}
+        onPaneClick={() => setSelectedEdge(null)}
+        onNodeClick={() => setSelectedEdge(null)}
       >
-        <Background />
+        <Background gap={12} size={1} color="#e2e8f0" />
         <Controls />
       </ReactFlow>
       
-      <div className="absolute bottom-4 left-4 right-4 z-10 text-sm text-muted-foreground bg-card/90 px-4 py-3 rounded-md border">
-        <div className="flex justify-between items-center text-xs">
-          <span className="font-semibold">Input Layer</span>
-          <span className="font-semibold">
-            Hidden Layer{hiddenLayerCount > 1 ? 's' : ''} ({hiddenLayerCount})
-          </span>
-          <span className="font-semibold">Output Layer</span>
+      {selectedEdge && (
+        <div className="absolute top-4 right-4 z-10 w-64 p-4 bg-background border rounded-lg shadow-xl animate-in slide-in-from-right-4 fade-in">
+          <div className="flex justify-between items-center mb-4">
+            <h4 className="text-sm font-semibold">Edit Connection Weight</h4>
+            <Badge variant="outline" className="font-mono">{selectedEdge.w.toFixed(3)}</Badge>
+          </div>
+          <Slider
+            value={[selectedEdge.w]}
+            min={-5}
+            max={5}
+            step={0.01}
+            onValueChange={([val]) => {
+               setSelectedEdge(prev => prev ? { ...prev, w: val } : prev);
+               onWeightChange(selectedEdge.layerIdx, selectedEdge.from, selectedEdge.to, val);
+            }}
+          />
+          <p className="text-xs text-muted-foreground mt-3 leading-relaxed">
+            Adjusting this weight manually changes how much the source neuron influences the target neuron. Overriding it pauses training.
+          </p>
         </div>
+      )}
+
+      {/* Layer Labels */}
+      <div className="absolute bottom-4 left-4 right-4 z-10 text-sm text-muted-foreground bg-card/90 px-4 py-3 rounded-md border flex justify-between items-center text-xs shadow-sm">
+          <span className="font-semibold uppercase tracking-wider text-neural-blue">Input Layer</span>
+          <span className="font-semibold text-center flex-1 uppercase tracking-wider">
+            Hidden Layers
+          </span>
+          <span className="font-semibold uppercase tracking-wider text-neural-cyan">Output Layer</span>
       </div>
     </div>
   );
