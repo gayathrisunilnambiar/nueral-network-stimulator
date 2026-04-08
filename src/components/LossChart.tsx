@@ -5,6 +5,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 interface LossData {
   epoch: number;
   loss: number;
+  accuracy: number;
 }
 
 interface LossChartProps {
@@ -14,6 +15,7 @@ interface LossChartProps {
 
 export default function LossChart({ data, hiddenLayerCount }: LossChartProps) {
   const latestLoss = data.length > 0 ? data[data.length - 1].loss : 0;
+  const latestAccuracy = data.length > 0 ? data[data.length - 1].accuracy : 0;
   
   return (
     <Card className="w-full">
@@ -31,6 +33,10 @@ export default function LossChart({ data, hiddenLayerCount }: LossChartProps) {
             {latestLoss.toFixed(4)}
           </div>
           <div className="text-sm text-muted-foreground">Current Loss</div>
+          <div className="mt-3 text-lg font-semibold text-neural-cyan">
+            {(latestAccuracy * 100).toFixed(1)}%
+          </div>
+          <div className="text-sm text-muted-foreground">Current Accuracy</div>
         </div>
         
         {data.length > 0 && (

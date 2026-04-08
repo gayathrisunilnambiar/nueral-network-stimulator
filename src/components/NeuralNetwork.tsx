@@ -15,6 +15,12 @@ import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import { Slider } from './ui/slider';
 import { Badge } from './ui/badge';
 
+interface NeuronNodeData {
+  layerType: "input" | "hidden" | "output";
+  outputValue: number;
+  bias: number;
+}
+
 // Color interpolator for weights (-1 to 1) -> (red to blue)
 const getWeightColor = (w: number) => {
   if (w < 0) {
@@ -31,7 +37,7 @@ const getWeightStrokeWidth = (w: number) => {
 };
 
 // Node component
-const NeuronNode = ({ data }: { data: any }) => {
+const NeuronNode = ({ data }: { data: NeuronNodeData }) => {
   const val = data.outputValue || 0; 
   const opacity = Math.min(1, Math.abs(val));
   const isPositive = val > 0;
@@ -75,7 +81,7 @@ interface NeuralNetworkProps {
 }
 
 export default function NeuralNetworkVis({ networkEngine, architecture, currentEpoch, onWeightChange }: NeuralNetworkProps) {
-  const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node<NeuronNodeData>>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   
   const [selectedEdge, setSelectedEdge] = useState<{ id: string, w: number, layerIdx: number, from: number, to: number } | null>(null);
@@ -83,12 +89,13 @@ export default function NeuralNetworkVis({ networkEngine, architecture, currentE
   useEffect(() => {
     if (!networkEngine) return;
     
-    const engineWeights = networkEngine.getWeights();
+    const snapshot = networkEngine.getSnapshot();
+    const engineWeights = snapshot.layers;
     
     const layerSpacing = 200;
     const neuronSpacing = 70;
     
-    const newNodes: Node[] = [];
+    const newNodes: Node<NeuronNodeData>[] = [];
     const newEdges: Edge[] = [];
     
     const maxNeurons = Math.max(...architecture);
@@ -118,8 +125,6 @@ export default function NeuralNetworkVis({ networkEngine, architecture, currentE
             layerType, 
             outputValue: outputs[i],
             bias: layerIdx > 0 ? biases[i] : 0,
-            nId: i,
-            lId: layerIdx
           },
           targetPosition: Position.Left,
           sourcePosition: Position.Right,

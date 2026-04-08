@@ -1,4 +1,25 @@
+import type {
+  BackpropConnectionState,
+  BackpropagationSnapshot,
+} from "@/types/backpropagation";
+import type {
+  ForwardPassConnectionState,
+  ForwardPassSnapshot,
+} from "@/types/forward-pass";
+
 export type ActivationType = 'relu' | 'sigmoid' | 'tanh' | 'linear';
+
+export interface LayerSnapshot {
+  weights: number[][];
+  biases: number[];
+  outputs: number[];
+  activation: ActivationType;
+}
+
+export interface NetworkSnapshot {
+  architecture: number[];
+  layers: LayerSnapshot[];
+}
 
 export class Matrix {
   rows: number;
@@ -152,6 +173,7 @@ export class Layer {
   // Cache for backprop
   inputs: Matrix | null = null;
   outputs: Matrix | null = null;
+  weightedSums: Matrix | null = null;
 
   constructor(inputSize: number, outputSize: number, activationFunc: ActivationType = 'sigmoid') {
     this.weights = new Matrix(outputSize, inputSize);
@@ -188,6 +210,7 @@ export class Layer {
     this.inputs = inputs;
     const z = Matrix.multiply(this.weights, inputs);
     z.add(this.biases);
+    this.weightedSums = z.clone();
     z.map((val) => this.activate(val));
     this.outputs = z;
     return z;
@@ -212,12 +235,22 @@ export class NeuralNetwork {
     }
   }
 
-  getWeights(): { weights: number[][]; biases: number[]; outputs: number[] }[] {
-    return this.layers.map(layer => ({
-      weights: layer.weights.data,
-      biases: layer.biases.data.map(b => b[0]),
-      outputs: layer.outputs ? layer.outputs.data.map(o => o[0]) : new Array(layer.weights.rows).fill(0)
-    }));
+  getSnapshot(): NetworkSnapshot {
+    return {
+      architecture: [...this.architecture],
+      layers: this.layers.map((layer) => ({
+        weights: layer.weights.data.map((row) => [...row]),
+        biases: layer.biases.data.map((bias) => bias[0]),
+        outputs: layer.outputs
+          ? layer.outputs.data.map((output) => output[0])
+          : new Array(layer.weights.rows).fill(0),
+        activation: layer.activationFunc,
+      })),
+    };
+  }
+
+  getWeights() {
+    return this.getSnapshot().layers;
   }
 
   setLearningRate(lr: number) {
@@ -254,26 +287,244 @@ export class NeuralNetwork {
     }
     loss /= errArray.length;
 
-    let currentErrors = outputError;
+    const previousWeights = this.layers.map((layer) => layer.weights.clone());
+    let downstreamDelta: Matrix | null = null;
 
     for (let i = this.layers.length - 1; i >= 0; i--) {
       const layer = this.layers[i];
       const prev_inputs = layer.inputs!;
+      const derivatives = Matrix.map(layer.outputs!, val => layer.derivative(val));
+      let delta: Matrix;
 
-      const gradients = Matrix.map(layer.outputs!, val => layer.derivative(val));
-      gradients.multiply(currentErrors);
-      gradients.multiply(this.learningRate);
+      if (i === this.layers.length - 1) {
+        // For MSE, the output layer starts with "prediction minus target",
+        // then scales it by the activation derivative to get the local delta.
+        const predictionMinusTarget = Matrix.subtract(layer.outputs!, targets);
+        predictionMinusTarget.multiply(2 / targetArray.length);
+        delta = predictionMinusTarget;
+      } else {
+        // Hidden layers do not see the target directly. Their error signal comes
+        // from the next layer's deltas flowing backward through the old weights.
+        const nextWeightsT = Matrix.transpose(previousWeights[i + 1]);
+        delta = Matrix.multiply(nextWeightsT, downstreamDelta!);
+      }
+
+      delta.multiply(derivatives);
 
       const inputs_t = Matrix.transpose(prev_inputs);
-      const weight_deltas = Matrix.multiply(gradients, inputs_t);
+      const weightGradients = Matrix.multiply(delta, inputs_t);
+      const weightUpdates = weightGradients.clone();
+      weightUpdates.multiply(-this.learningRate);
 
-      layer.weights.add(weight_deltas);
-      layer.biases.add(gradients);
+      const biasUpdates = delta.clone();
+      biasUpdates.multiply(-this.learningRate);
 
-      const weights_t = Matrix.transpose(layer.weights);
-      currentErrors = Matrix.multiply(weights_t, currentErrors);
+      layer.weights.add(weightUpdates);
+      layer.biases.add(biasUpdates);
+      downstreamDelta = delta;
     }
     
     return loss;
+  }
+
+  setLayerWeights(layerIdx: number, fromNeuron: number, toNeuron: number, newWeight: number) {
+    const layer = this.layers[layerIdx];
+
+    if (!layer) {
+      return;
+    }
+
+    if (layer.weights.data[toNeuron]?.[fromNeuron] === undefined) {
+      return;
+    }
+
+    layer.weights.data[toNeuron][fromNeuron] = newWeight;
+  }
+
+  traceForwardPass(inputArray: number[]): ForwardPassSnapshot {
+    const output = this.predict(inputArray);
+    const layers = [
+      {
+        layerIndex: 0,
+        neurons: inputArray.map((value, index) => ({
+          index,
+          bias: 0,
+          weightedSum: value,
+          activation: value,
+          isInput: true,
+        })),
+      },
+    ];
+
+    const connections: ForwardPassConnectionState[] = [];
+
+    for (let layerIdx = 0; layerIdx < this.layers.length; layerIdx++) {
+      const layer = this.layers[layerIdx];
+      const previousOutputs =
+        layer.inputs?.data.map((value) => value[0]) ?? new Array(layer.weights.cols).fill(0);
+      const weightedSums =
+        layer.weightedSums?.data.map((value) => value[0]) ?? new Array(layer.weights.rows).fill(0);
+      const activations =
+        layer.outputs?.data.map((value) => value[0]) ?? new Array(layer.weights.rows).fill(0);
+
+      layers.push({
+        layerIndex: layerIdx + 1,
+        neurons: activations.map((activation, neuronIdx) => ({
+          index: neuronIdx,
+          bias: layer.biases.data[neuronIdx][0],
+          weightedSum: weightedSums[neuronIdx],
+          activation,
+          isInput: false,
+        })),
+      });
+
+      for (let toNeuron = 0; toNeuron < layer.weights.rows; toNeuron++) {
+        for (let fromNeuron = 0; fromNeuron < layer.weights.cols; fromNeuron++) {
+          const weight = layer.weights.data[toNeuron][fromNeuron];
+
+          connections.push({
+            fromLayer: layerIdx,
+            fromNeuron,
+            toLayer: layerIdx + 1,
+            toNeuron,
+            weight,
+            contribution: previousOutputs[fromNeuron] * weight,
+          });
+        }
+      }
+    }
+
+    return {
+      input: [...inputArray],
+      output,
+      layers,
+      connections,
+    };
+  }
+
+  traceBackpropagation(inputArray: number[], targetArray: number[]): BackpropagationSnapshot {
+    const output = this.predict(inputArray);
+    const previousWeights = this.layers.map((layer) => layer.weights.clone());
+    const layerStates = this.layers.map(() => ({
+      neurons: [] as BackpropagationSnapshot["layers"][number]["neurons"],
+    }));
+    const connections: BackpropConnectionState[] = [];
+
+    const prediction = output[0] ?? 0;
+    const target = targetArray[0] ?? 0;
+    const error = target - prediction;
+    const mse = error * error;
+    let downstreamDelta: Matrix | null = null;
+
+    for (let layerIdx = this.layers.length - 1; layerIdx >= 0; layerIdx--) {
+      const layer = this.layers[layerIdx];
+      const activations = layer.outputs?.data.map((value) => value[0]) ?? [];
+      const weightedSums = layer.weightedSums?.data.map((value) => value[0]) ?? [];
+      const previousActivations = layer.inputs?.data.map((value) => value[0]) ?? [];
+      const derivatives = activations.map((value) => layer.derivative(value));
+
+      let upstreamSignals: number[];
+      let deltas: number[];
+
+      if (layerIdx === this.layers.length - 1) {
+        upstreamSignals = activations.map((value, index) => (2 * (value - targetArray[index])) / targetArray.length);
+        deltas = upstreamSignals.map((signal, index) => signal * derivatives[index]);
+      } else {
+        upstreamSignals = new Array(layer.weights.rows).fill(0);
+
+        for (let neuronIndex = 0; neuronIndex < layer.weights.rows; neuronIndex++) {
+          let sum = 0;
+          for (let nextNeuron = 0; nextNeuron < previousWeights[layerIdx + 1].rows; nextNeuron++) {
+            const nextWeight = previousWeights[layerIdx + 1].data[nextNeuron][neuronIndex];
+            const nextDelta = downstreamDelta?.data[nextNeuron][0] ?? 0;
+            sum += nextWeight * nextDelta;
+          }
+          upstreamSignals[neuronIndex] = sum;
+        }
+
+        // Each hidden neuron combines the downstream error signal with its own
+        // local slope, which is the core idea behind backpropagation.
+        deltas = upstreamSignals.map((signal, index) => signal * derivatives[index]);
+      }
+
+      layerStates[layerIdx] = {
+        neurons: activations.map((activation, neuronIndex) => ({
+          index: neuronIndex,
+          bias: layer.biases.data[neuronIndex][0],
+          weightedSum: weightedSums[neuronIndex],
+          activation,
+          activationDerivative: derivatives[neuronIndex],
+          upstreamSignal: upstreamSignals[neuronIndex],
+          delta: deltas[neuronIndex],
+          biasGradient: deltas[neuronIndex],
+          biasUpdate: -this.learningRate * deltas[neuronIndex],
+          isInput: false,
+          isOutput: layerIdx === this.layers.length - 1,
+        })),
+      };
+
+      for (let toNeuron = 0; toNeuron < layer.weights.rows; toNeuron++) {
+        for (let fromNeuron = 0; fromNeuron < layer.weights.cols; fromNeuron++) {
+          const weight = layer.weights.data[toNeuron][fromNeuron];
+          const sourceActivation = previousActivations[fromNeuron];
+          const gradient = deltas[toNeuron] * sourceActivation;
+          const update = -this.learningRate * gradient;
+
+          connections.push({
+            fromLayer: layerIdx,
+            fromNeuron,
+            toLayer: layerIdx + 1,
+            toNeuron,
+            weight,
+            sourceActivation,
+            targetDelta: deltas[toNeuron],
+            gradient,
+            update,
+            newWeight: weight + update,
+          });
+        }
+      }
+
+      downstreamDelta = Matrix.fromArray(deltas);
+    }
+
+    const inputLayer = {
+      layerIndex: 0,
+      neurons: inputArray.map((value, index) => ({
+        index,
+        bias: 0,
+        weightedSum: value,
+        activation: value,
+        activationDerivative: 1,
+        upstreamSignal: 0,
+        delta: 0,
+        biasGradient: 0,
+        biasUpdate: 0,
+        isInput: true,
+        isOutput: false,
+      })),
+    };
+
+    return {
+      input: [...inputArray],
+      target: [...targetArray],
+      output,
+      learningRate: this.learningRate,
+      loss: {
+        prediction,
+        target,
+        error,
+        mse,
+        derivativeWrtPrediction: 2 * (prediction - target),
+      },
+      layers: [
+        inputLayer,
+        ...layerStates.map((layerState, index) => ({
+          layerIndex: index + 1,
+          neurons: layerState.neurons,
+        })),
+      ],
+      connections,
+    };
   }
 }

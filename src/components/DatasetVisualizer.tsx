@@ -1,9 +1,9 @@
 import React, { useEffect, useRef } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Target, Info } from 'lucide-react';
-import { DataPoint } from '../lib/datasets';
 import { NeuralNetwork } from '../lib/neural-net';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
+import type { DataPoint } from '@/types/simulator';
 
 interface DatasetVisualizerProps {
   dataset: DataPoint[];
@@ -22,10 +22,12 @@ export default function DatasetVisualizer({ dataset, network, currentEpoch }: Da
 
     const width = canvas.width;
     const height = canvas.height;
+    ctx.clearRect(0, 0, width, height);
 
-    // Draw background (decision boundary heatmap)
+    // The background is a prediction heatmap: each small tile shows what class the
+    // network would assign at that location, which makes the boundary visible.
     if (network) {
-      const resolution = 10;
+      const resolution = 8;
       for (let x = 0; x < width; x += resolution) {
         for (let y = 0; y < height; y += resolution) {
           // coordinate maps from canvas to [-1, 1]
@@ -47,7 +49,17 @@ export default function DatasetVisualizer({ dataset, network, currentEpoch }: Da
       ctx.clearRect(0, 0, width, height);
     }
 
-    // Draw data points
+    // Data points sit on top of the heatmap so students can compare the learned
+    // regions with the actual labels the model is trying to separate.
+    ctx.strokeStyle = "rgba(15, 23, 42, 0.18)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(width / 2, 0);
+    ctx.lineTo(width / 2, height);
+    ctx.moveTo(0, height / 2);
+    ctx.lineTo(width, height / 2);
+    ctx.stroke();
+
     dataset.forEach(pt => {
       const x = ((pt.x + 1) / 2) * width;
       const y = ((-pt.y + 1) / 2) * height; // Flip Y back for rendering
@@ -86,12 +98,18 @@ export default function DatasetVisualizer({ dataset, network, currentEpoch }: Da
         </CardTitle>
       </CardHeader>
       <CardContent className="flex justify-center items-center">
-        <canvas 
-          ref={canvasRef}
-          width={400}
-          height={400}
-          className="border rounded-md bg-white w-full max-w-[400px] aspect-square"
-        />
+        <div className="w-full max-w-[400px]">
+          <canvas 
+            ref={canvasRef}
+            width={400}
+            height={400}
+            className="border rounded-md bg-white w-full max-w-[400px] aspect-square"
+          />
+          <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
+            <span>Orange = class 0 region</span>
+            <span>Blue = class 1 region</span>
+          </div>
+        </div>
       </CardContent>
     </Card>
   );
